@@ -22,8 +22,12 @@ param(
    [Alias('o')]
    [string]$Organization,
 
-   [Parameter(Mandatory, HelpMessage="The directory where to store the backup archive. eg: C:/Backup/")]
+   [Parameter(Mandatory, HelpMessage="The directory where to download repositories. eg: C:/Backup/")]
    [Alias('d')]
+   [string]$DownloadDir,
+
+   [Parameter(Mandatory, HelpMessage="The directory where to store the backup archive. eg: C:/Backup/")]
+   [Alias('b')]
    [string]$BackupDir,
 
    [Parameter(Mandatory, HelpMessage="The Personal Access Token (PAT) that you need to generate for your Azure Devops Account")]
@@ -41,12 +45,14 @@ param(
 
 Write-Host "=== Script parameters"
 Write-Host "ORGANIZATION_URL  = $Organization"
+Write-Host "DOWNLOAD_PATH     = $DownloadDir"
 Write-Host "BACKUP_ROOT_PATH  = $BackupDir"
 Write-Host "RETENTION_DAYS    = $RetentionDays"
 Write-Host "DRY_RUN           = $DryRun"
 
 #Store script start time
 $startTime = Get-Date
+$originalDir = Get-Location
 
 #Install Azure CLI on Windows
 #Write-Host "=== Install Azure CLI"
@@ -64,8 +70,9 @@ Write-Host "=== Get project list"
 $projectList = az devops project list --organization $Organization --query 'value[]' | ConvertFrom-Json
 
 #Create backup folder with current time as name
-$backupFolder= Get-Date -Format "yyyyMMddHHmm"
-$backupDirectory="$BackupDir$backupFolder"
+$dateTimeFolder= Get-Date -Format "yyyy.MM.dd_HH.mm"
+$backupFolder=$dateTimeFolder
+$backupDirectory="$DownloadDir$backupFolder"
 New-Item -Path $backupDirectory -ItemType Directory
 Set-Location $backupDirectory
 Write-Host "=== Backup folder created [${backupDirectory}]"
@@ -75,7 +82,6 @@ $projectCounter=0
 $repoCounter=0
 
 foreach ($project in $projectList) {
-
 
    Write-Host "==> Backup project [${projectCounter}] [$($project.name)] [$($project.id)]"
 
@@ -108,6 +114,7 @@ foreach ($project in $projectList) {
    }
 
    $projectCounter++
+
 }
 
 #Backup summary
@@ -117,8 +124,22 @@ $backupSizeUncompressed= "{0:N2}" -f ((Get-ChildItem -path $backupDirectory -rec
 
 Set-Location $backupDirectory
 Write-Host "=== Compress folder"
-Compress-Archive -Path . -DestinationPath "$backupFolder.zip" -CompressionLevel Optimal
-$backupSizeCompressed="{0:N2}" -f ((Get-ChildItem $backupFolder.zip | Measure-Object -property length -sum ).sum /1MB) + "MB"
+
+
+# Ottieni tutte le sottocartelle della cartella principale
+$subfolders = Get-ChildItem -Path $backupDirectory -Directory
+
+# Per ogni sottocartella, crea un archivio zip con lo stesso nome nella cartella di destinazione
+$zipBaseFolder = Join-Path -Path $BackupDir -ChildPath $dateTimeFolder
+New-Item -Path $zipBaseFolder -ItemType Directory
+foreach ($subfolder in $subfolders) {
+  $zipName = $subfolder.Name + ".zip"
+  $fullZipPath = Join-Path -Path $zipBaseFolder -ChildPath $zipName
+  Compress-Archive -Path $subfolder.FullName -DestinationPath $fullZipPath -CompressionLevel Fastest
+}
+
+# Compress-Archive -Path . -DestinationPath "$backupFolder.zip" -CompressionLevel Fastest
+#$backupSizeCompressed="{0:N2}" -f ((Get-ChildItem $backupFolder.zip | Measure-Object -property length -sum ).sum /1MB) + "MB"
 Write-Host "=== Remove raw data in folder"
 Get-ChildItem -Directory | Remove-Item -Force -Recurse
 
@@ -126,7 +147,7 @@ Write-Host "=== Backup completed ==="
 Write-Host  "Projects : $projectCounter"
 Write-Host  "Repositories : $repoCounter"
 
-Write-Host "Size : $backupSizeUncompressed (uncompressed) - $backupSizeCompressed (compressed)"
+#Write-Host "Size : $backupSizeUncompressed (uncompressed) - $backupSizeCompressed (compressed)"
 Write-Host "Elapsed time: $($elapsed.Days) days $($elapsed.Hours) hr $($elapsed.Minutes) min $($elapsed.Seconds) sec"
 
 if ($RetentionDays -eq 0) {
@@ -137,3 +158,5 @@ else
    Write-Host "=== Apply retention policy ($RetentionDays days)"
    Get-ChildItem $BackupDir -Recurse -Force -Directory  | Where-Object {$_.CreationTime -le $(get-date).Adddays(-$RetentionDays)} | Remove-Item -Force -Recurse
 }
+
+Set-Location $originalDir
